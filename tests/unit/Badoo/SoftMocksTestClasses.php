@@ -42,17 +42,46 @@ class ConstructTestClass
 
 class BaseInheritanceTestClass
 {
+    const INHERITED_VALUE = 1;
+
     public function doSomething()
     {
         return 42;
+    }
+
+    public static function getSelfInheritedConstant()
+    {
+        return self::INHERITED_VALUE;
+    }
+
+    public static function getStaticInheritedConstant()
+    {
+        return static::INHERITED_VALUE;
     }
 }
 
 class InheritanceTestClass extends BaseInheritanceTestClass
 {
+    const INHERITED_VALUE = 2;
+
     public function otherFunction()
     {
         return 88;
+    }
+
+    public static function getParentInheritedConstant()
+    {
+        return parent::INHERITED_VALUE;
+    }
+
+    public static function getChildSelfInheritedConstant()
+    {
+        return self::INHERITED_VALUE;
+    }
+
+    public static function getChildStaticInheritedConstant()
+    {
+        return static::INHERITED_VALUE;
     }
 }
 

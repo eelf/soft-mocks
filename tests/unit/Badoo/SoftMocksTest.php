@@ -231,6 +231,43 @@ class SoftMocksTest extends \PHPUnit\Framework\TestCase
         static::assertEquals(2, DefaultTestClass::getValue());
     }
 
+    public function testInheritedConstant()
+    {
+        static::assertEquals(1, BaseInheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(1, BaseInheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(1, InheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(1, InheritanceTestClass::getParentInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getChildSelfInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getChildStaticInheritedConstant());
+
+        \Badoo\SoftMocks::redefineConstant(
+            '\Badoo\SoftMock\Tests\BaseInheritanceTestClass::INHERITED_VALUE',
+            3
+        );
+
+        static::assertEquals(3, BaseInheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(3, BaseInheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(3, InheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(3, InheritanceTestClass::getParentInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getChildSelfInheritedConstant());
+        static::assertEquals(2, InheritanceTestClass::getChildStaticInheritedConstant());
+
+        \Badoo\SoftMocks::redefineConstant(
+            '\Badoo\SoftMock\Tests\InheritanceTestClass::INHERITED_VALUE',
+            4
+        );
+
+        static::assertEquals(3, BaseInheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(3, BaseInheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(3, InheritanceTestClass::getSelfInheritedConstant());
+        static::assertEquals(4, InheritanceTestClass::getStaticInheritedConstant());
+        static::assertEquals(3, InheritanceTestClass::getParentInheritedConstant());
+        static::assertEquals(4, InheritanceTestClass::getChildSelfInheritedConstant());
+        static::assertEquals(4, InheritanceTestClass::getChildStaticInheritedConstant());
+    }
+
     public function testInheritMock()
     {
         \Badoo\SoftMocks::redefineMethod(
@@ -527,17 +564,112 @@ class SoftMocksTest extends \PHPUnit\Framework\TestCase
         WithRestrictedConstantsChildPHP71TestClass::getParentPrivateValue();
     }
 
-    public function testWithProtectedConstantPHP71()
+    public function testWithSelfProtectedConstantPHP71()
     {
         static::markTestSkippedForPHPVersionBelow('7.1.0');
 
         require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
 
-        static::assertEquals(11, WithRestrictedConstantsPHP71TestClass::getProtectedValue());
+        static::assertEquals(11, WithRestrictedConstantsPHP71TestClass::getSelfProtectedValue());
 
         \Badoo\SoftMocks::redefineConstant('\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE', 22);
 
-        static::assertEquals(22, WithRestrictedConstantsPHP71TestClass::getProtectedValue());
+        static::assertEquals(22, WithRestrictedConstantsPHP71TestClass::getSelfProtectedValue());
+    }
+
+    public function testWithSelfProtectedConstantFromChildPHP71()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        static::assertEquals(11, WithRestrictedConstantsChildPHP71TestClass::getSelfProtectedValue());
+
+        \Badoo\SoftMocks::redefineConstant('\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE', 22);
+
+        static::assertEquals(22, WithRestrictedConstantsChildPHP71TestClass::getSelfProtectedValue());
+    }
+
+    public function testWithStaticProtectedConstantPHP71()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        static::assertEquals(11, WithRestrictedConstantsPHP71TestClass::getStaticProtectedValue());
+
+        \Badoo\SoftMocks::redefineConstant('\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE', 22);
+
+        static::assertEquals(22, WithRestrictedConstantsPHP71TestClass::getStaticProtectedValue());
+    }
+
+    public function testWithStaticProtectedConstantFromChildPHP71()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        static::assertEquals(11, WithRestrictedConstantsChildPHP71TestClass::getStaticProtectedValue());
+
+        \Badoo\SoftMocks::redefineConstant('\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE', 22);
+
+        static::assertEquals(22, WithRestrictedConstantsChildPHP71TestClass::getStaticProtectedValue());
+    }
+
+    public function testWithThisProtectedConstantFromChildPHP71()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        $object = new WithRestrictedConstantsChildPHP71TestClass();
+
+        static::assertEquals(11, $object->getThisObjectProtectedValue());
+
+        \Badoo\SoftMocks::redefineConstant('\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE', 22);
+
+        static::assertEquals(22, $object->getThisObjectProtectedValue());
+    }
+
+    public function testWithProtectedInheritedConstantPHP71()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        static::assertEquals(111, WithRestrictedConstantsPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(111, WithRestrictedConstantsPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(111, WithRestrictedConstantsChildPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(111, WithRestrictedConstantsChildPHP71TestClass::getParentInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getChildSelfInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getChildStaticInheritedConstant());
+
+        \Badoo\SoftMocks::redefineConstant(
+            '\Badoo\SoftMock\Tests\WithRestrictedConstantsPHP71TestClass::PROTECTED_INHERITED_VALUE',
+            333
+        );
+
+        static::assertEquals(333, WithRestrictedConstantsPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsChildPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsChildPHP71TestClass::getParentInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getChildSelfInheritedConstant());
+        static::assertEquals(222, WithRestrictedConstantsChildPHP71TestClass::getChildStaticInheritedConstant());
+
+        \Badoo\SoftMocks::redefineConstant(
+            '\Badoo\SoftMock\Tests\WithRestrictedConstantsChildPHP71TestClass::PROTECTED_INHERITED_VALUE',
+            444
+        );
+
+        static::assertEquals(333, WithRestrictedConstantsPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsChildPHP71TestClass::getSelfInheritedConstant());
+        static::assertEquals(444, WithRestrictedConstantsChildPHP71TestClass::getStaticInheritedConstant());
+        static::assertEquals(333, WithRestrictedConstantsChildPHP71TestClass::getParentInheritedConstant());
+        static::assertEquals(444, WithRestrictedConstantsChildPHP71TestClass::getChildSelfInheritedConstant());
+        static::assertEquals(444, WithRestrictedConstantsChildPHP71TestClass::getChildStaticInheritedConstant());
     }
 
     /**

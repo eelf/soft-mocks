@@ -6,7 +6,10 @@ There are next changes:
 
 - dev dependence vaimo/composer-patches was updated from 3.4.3 to 3.23.1;
 - patch level for patches was provided;
-- phpunit6 support was added.
+- phpunit6 support was added;
+- class static protected constant was fixed;
+- class constants inheritance was fixed;
+- class constants removing was disabled.
 
 ## v1.3.5
 
