@@ -3,6 +3,7 @@
  * @author Oleg Efimov <o.efimov@corp.badoo.com>
  * @author Kirill Abrosimov <k.abrosimov@corp.badoo.com>
  */
+
 namespace Badoo\SoftMock\Tests;
 
 class WithRestrictedConstantsPHP71TestClass
@@ -96,4 +97,32 @@ function getPrivateValue() : int
 function getProtectedValue() : int
 {
     return WithRestrictedConstantsPHP71TestClass::PROTECTED_VALUE;
+}
+
+class CrossBase {}
+
+class CrossFirst extends CrossBase
+{
+    protected const CROSS = 10;
+}
+
+class CrossSecond extends CrossBase
+{
+    public static function getCross()
+    {
+        return CrossFirst::CROSS;
+    }
+}
+
+class DescendantBase
+{
+    public static function getDescendant()
+    {
+        return static::DESCENDANT;
+    }
+}
+
+class DescendantFirst extends DescendantBase
+{
+    protected const DESCENDANT = 20;
 }

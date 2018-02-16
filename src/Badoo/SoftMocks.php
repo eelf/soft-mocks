@@ -1396,7 +1396,13 @@ class SoftMocks
         } while ($ancestor = $parent);
 
         // To avoid 'Cannot access private/protected const' error, see comment above
-        return !empty($ConstantReflection) ? $ConstantReflection->getValue() : \constant($const_full_name);
+        if (!empty($ConstantReflection)) {
+            return $ConstantReflection->getValue();
+        }
+        if (!\defined($const_full_name)) {
+            throw new \RuntimeException("Undefined class constant '{$const_full_name}'");
+        }
+        return \constant($const_full_name);
     }
 
     private static function rewriteContents($orig_file, $target_file, $contents)

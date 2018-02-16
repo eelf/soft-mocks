@@ -765,4 +765,39 @@ class SoftMocksTest extends \PHPUnit\Framework\TestCase
         //file_put_contents(__DIR__ . '/fixtures/expected/' . $filename, file_get_contents($result));
         $this->assertEquals(trim(file_get_contents(__DIR__ . '/fixtures/expected/' . $filename)), file_get_contents($result));
     }
+
+    /**
+     * @expectedException \Error
+     * @expectedExceptionMessage Cannot access protected const
+     */
+    public function testCross()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        CrossSecond::getCross();
+    }
+
+    public function testDescendantGood()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        self::assertSame(20, DescendantFirst::getDescendant());
+    }
+
+    /**
+     * @expectedException \RuntimeException
+     * @expectedExceptionMessage Undefined class constant
+     */
+    public function testDescendantBad()
+    {
+        static::markTestSkippedForPHPVersionBelow('7.1.0');
+
+        require_once __DIR__ . '/WithRestrictedConstantsPHP71TestClass.php';
+
+        DescendantBase::getDescendant();
+    }
 }
