@@ -431,7 +431,6 @@ class SoftMocks
     const MOCKS_CACHE_TOUCHTIME = 86400; // 1 day
 
     private static $rewrite_cache = [/* source => target */];
-    private static $orig_paths = [/* target => source */];
 
     private static $version;
 
@@ -461,6 +460,7 @@ class SoftMocks
     private static $internal_func_mocks = []; // internal mocks that cannot be changed
 
     private static $generator_mocks = []; // mocks for generators
+    private static $generator_func_mocks = []; // mocks for generators
 
     private static $new_mocks = []; // mocks for "new" operator
     private static $lang_construct_mocks = [];
@@ -491,6 +491,12 @@ class SoftMocks
 
     public static function init()
     {
+        // SoftMocks wrapper is not going to work well with opcache
+        if (function_exists('opcache_reset')) {
+            opcache_reset();
+            register_shutdown_function('opcache_reset');
+        }
+
         if (!defined('SOFTMOCKS_ROOT_PATH')) {
             define('SOFTMOCKS_ROOT_PATH', '/');
         }
@@ -499,6 +505,8 @@ class SoftMocks
             self::$debug = true;
         }
 
+        stream_wrapper_register("soft", SoftMocksStream::class);
+
         self::$func_mocks['call_user_func_array'] = [
             'args' => '', 'code' => 'return \\' . self::class . '::call($params[0], $params[1]);',
         ];
@@ -506,9 +514,6 @@ class SoftMocks
             'args' => '', 'code' => '$func = array_shift($params); return \\' . self::class . '::call($func, $params);',
         ];
         self::$func_mocks['is_callable'] = [
-            'args' => '$arg', 'code' => 'return \\' . self::class . '::isCallable($arg);',
-        ];
-        self::$func_mocks['function_exists'] = [
             'args' => '$arg', 'code' => 'return \\' . self::class . '::isCallable($arg);',
         ];
         self::$func_mocks['constant'] = [
@@ -636,7 +641,6 @@ class SoftMocks
         }
 
         self::ignoreFiles(get_included_files());
-        self::injectIntoPhpunit();
         self::initProjectPath();
     }
 
@@ -800,61 +804,6 @@ class SoftMocks
         echo "\n$descr: $errstr in " . self::replaceFilename($errfile) . " on line $errline\n";
     }
 
-    public static function printBackTrace($e = null)
-    {
-        $str = $e ?: new \Exception();
-        if ($str instanceof \PHPUnit_Framework_ExceptionWrapper || $str instanceof \PHPUnit\Framework\ExceptionWrapper) {
-            $trace = [];
-            foreach ($str->getSerializableTrace() as $idx => $frame) {
-                $frame += ['file' => '', 'line' => '', 'class' => '', 'type' => '', 'function' => ''];
-                $trace[] = sprintf('#%d %s(%s): %s%s%s()', $idx, $frame['file'], $frame['line'], $frame['class'], $frame['type'], $frame['function']);
-            }
-            $trace_str = implode("\n", $trace);
-        } else {
-            $trace_str = $str->getTraceAsString();
-        }
-        $trace_str = $str->getFile() . '(' . $str->getLine() . ")\n$trace_str";
-
-        if (!empty(static::getEnvironment('REAL_BACKTRACE'))) {
-            echo $trace_str;
-            return;
-        }
-        $trace_lines = explode("\n", $trace_str);
-
-        foreach ($trace_lines as &$ln) {
-            $ln = preg_replace_callback(
-                '#(/[^:(]+)([:(])#',
-                function ($data) {
-                    return self::clearBasePath(self::replaceFilename($data[1], true) . $data[2]);
-                },
-                $ln
-            );
-
-            $ln = str_replace('[internal function]', '', $ln);
-            $ln = preg_replace('/^\\#\\d+\\s*\\:?\\s*/s', '', $ln);
-        }
-
-        echo "(use REAL_BACKTRACE=1 to get real trace) " . implode(
-            "\n ",
-            array_filter(
-                $trace_lines,
-                function ($str) {
-                    $parts = explode('(', trim($str), 2);
-                    if (count($parts) > 1) {
-                        $filename = $parts[0];
-                        if (mb_orig_stripos($filename, 'PHPUnit') !== false) {
-                            return false;
-                        }
-                    }
-
-                    return mb_orig_strpos($str, 'PHPUnit_Framework_ExpectationFailedException') === false
-                        && mb_orig_strpos($str, '{main}') === false
-                        && mb_orig_strpos($str, basename(__FILE__)) === false;
-                }
-            )
-        ) . "\n";
-    }
-
     public static function replaceFilenameRaw($file)
     {
         return self::replaceFilename($file, true);
@@ -862,13 +811,6 @@ class SoftMocks
 
     public static function replaceFilename($file, $raw = false)
     {
-        if (isset(self::$orig_paths[$file])) {
-            if ($raw) {
-                return self::$orig_paths[$file];
-            }
-            return $file . " (orig: " . self::$orig_paths[$file] . ")";
-        }
-
         return $file;
     }
 
@@ -892,15 +834,14 @@ class SoftMocks
 
     public static function rewrite($file)
     {
-        try {
-            return self::doRewrite($file);
-        } catch (\Exception $e) {
-            echo "Could not rewrite file $file: " . $e->getMessage() . "\n";
-            return false;
+        if (mb_orig_strpos($file, 'soft://') === 0) {
+            fwrite(STDERR, new \Exception($file) . "\n");
+            exit(1);
         }
+        return 'soft://' . $file;
     }
 
-    private static function doRewrite($file)
+    public static function doRewrite($file, &$opened_path = '')
     {
         if (self::$prepare_for_rewrite_callback !== null) {
             $callback = self::$prepare_for_rewrite_callback;
@@ -911,6 +852,8 @@ class SoftMocks
         if (!$file) {
             return $file;
         }
+
+        $opened_path = $file;
 
         if (!isset(self::$rewrite_cache[$file])) {
             if (mb_orig_strpos($file, self::$mocks_cache_path) === 0
@@ -930,16 +873,12 @@ class SoftMocks
 
             $md5_file = md5_file($file);
             if (!$md5_file) {
-                return (self::$orig_paths[$file] = self::$rewrite_cache[$file] = $file);
+                return self::$rewrite_cache[$file] = $file;
             }
 
             $clean_filepath = $file;
             if (strpos($clean_filepath, SOFTMOCKS_ROOT_PATH) === 0) {
                 $clean_filepath = substr($clean_filepath, strlen(SOFTMOCKS_ROOT_PATH));
-            }
-
-            if (self::$debug) {
-                self::debug("Clean filepath for $file is $clean_filepath");
             }
 
             $md5 = md5($clean_filepath . ':' . $md5_file);
@@ -961,7 +900,7 @@ class SoftMocks
 
             $target_file = realpath($target_file);
             self::$rewrite_cache[$file] = $target_file;
-            self::$orig_paths[$target_file] = $file;
+            if (self::$debug) fwrite(STDERR, "$file rewritten to $target_file\n");
         }
 
         return self::$rewrite_cache[$file];
@@ -1015,9 +954,9 @@ class SoftMocks
     private static function createRewrittenFile($file, $target_file)
     {
         if (self::$debug) {
-            echo "Rewriting $file => $target_file\n";
-            echo new \Exception();
-            ob_flush();
+            fwrite(STDOUT, "Rewriting $file => $target_file\n");
+            fwrite(STDOUT, new \Exception());
+            fwrite(STDOUT, "\n");
         }
 
         $contents = file_get_contents($file);
@@ -1420,6 +1359,9 @@ class SoftMocks
         if (SoftMocksTraverser::isFunctionIgnored($func)) {
             throw new \RuntimeException("Function $func cannot be mocked using Soft Mocks");
         }
+        if (!is_scalar($fakeCode)) {
+            throw new \RuntimeException("Only code in text form can be supplied");
+        }
         self::$func_mocks[$func] = ['args' => $functionArgs, 'code' => $fakeCode];
     }
 
@@ -1448,6 +1390,7 @@ class SoftMocks
     {
         self::$mocks = [];
         self::$generator_mocks = [];
+        self::$generator_func_mocks = [];
         self::$func_mocks = self::$internal_func_mocks;
         self::$temp_disable = false;
         self::$lang_construct_mocks = [];
@@ -1540,14 +1483,29 @@ class SoftMocks
         self::$generator_mocks[$class][$method] = $replacement;
     }
 
+    public static function redefineGeneratorFunction($func, callable $replacement)
+    {
+        self::$generator_func_mocks[$func] = $replacement;
+    }
+
     public static function restoreGenerator($class, $method)
     {
         unset(self::$generator_mocks[$class][$method]);
     }
 
+    public static function restoreGeneratorFunction($func)
+    {
+        unset(self::$generator_func_mocks[$func]);
+    }
+
     public static function isGeneratorMocked($class, $method)
     {
         return isset(self::$generator_mocks[$class][$method]);
+    }
+
+    public static function isGeneratorMockedFunction($func)
+    {
+        return isset(self::$generator_func_mocks[$func]);
     }
 
     public static function getMockForGenerator($class, $method)
@@ -1557,6 +1515,15 @@ class SoftMocks
         }
 
         return self::$generator_mocks[$class][$method];
+    }
+
+    public static function getMockForGeneratorFunction($func)
+    {
+        if (!isset(self::$generator_func_mocks[$func])) {
+            throw new \RuntimeException("Generator $func is not mocked");
+        }
+
+        return self::$generator_mocks[$func];
     }
 
     public static function redefineNew($class, callable $constructorFunc)
@@ -1666,11 +1633,8 @@ class SoftMocks
     private static function recursiveGetTraits(\ReflectionClass $Rc)
     {
         foreach ($Rc->getTraits() as $Trait) {
+            yield from self::recursiveGetTraits($Trait);
             yield $Trait;
-
-            foreach (self::recursiveGetTraits($Trait) as $T) {
-                yield $T;
-            }
         }
     }
 
@@ -1707,7 +1671,23 @@ class SoftMocks
      */
     public static function isFuncMocked($func)
     {
-        return isset(self::$func_mocks[$func]['code']) ? self::$func_mocks[$func]['code'] : false;
+        if (self::$temp_disable) {
+            if (self::$debug) {
+                self::debug("Temporarily disabling mock check: $func");
+            }
+            self::$temp_disable = false;
+            return false;
+        }
+
+        if (!isset(self::$func_mocks[$func]['code'])) {
+            return false;
+        }
+
+        if (self::$debug) {
+            self::debug("Func is mocked: $func");
+        }
+
+        return "\$__softmocks_cb = function(" . self::$func_mocks[$func]['args'] . ") use (\$params) { " . self::$func_mocks[$func]['code'] . "; }; return call_user_func_array(\$__softmocks_cb, \$mm_func_args);";
     }
 
     public static function callOriginal($callable, $args, $class = null)
@@ -1723,6 +1703,16 @@ class SoftMocks
             $method = $callable[1];
         } else if (is_scalar($callable) && mb_orig_strpos($callable, '::') !== false) {
             list($class, $method) = explode("::", $callable);
+        } else if (is_scalar($callable)) {
+            try {
+                $Rf = new \ReflectionFunction($callable);
+                if ($Rf->isUserDefined()) {
+                    self::$temp_disable = true; // we can only mock and check for mocks for user defined methods
+                }
+            } catch (\ReflectionException $e) {
+                // do nothing, it is ok in this case because it means that mock disabling is not needed
+            }
+            return call_user_func_array($callable, $args);
         } else {
             return call_user_func_array($callable, $args);
         }
@@ -1822,38 +1812,7 @@ class SoftMocks
 
     protected static function debug($message)
     {
-        echo $message . "\n";
-    }
-
-    public static function injectIntoPhpunit()
-    {
-        if (!class_exists(\PHPUnit_Util_Fileloader::class, false)) {
-            return;
-        }
-
-        if (!is_callable([\PHPUnit_Util_Fileloader::class, 'setFilenameRewriteCallback'])) {
-            if (self::$debug) {
-                self::debug("Cannot inject into phpunit: method setFilenameRewriteCallback not found");
-            }
-
-            return;
-        }
-
-        \PHPUnit_Util_Fileloader::setFilenameRewriteCallback([self::class, 'rewrite']);
-
-        \PHPUnit_Util_Fileloader::setFilenameRestoreCallback(
-            function ($filename) {
-                return self::replaceFilename($filename, true);
-            }
-        );
-
-        \PHPUnit_Util_Filter::setCustomStackTraceCallback(
-            function ($e) {
-                ob_start();
-                self::printBackTrace($e);
-                return ob_get_clean();
-            }
-        );
+        fwrite(STDOUT, $message . "\n");
     }
 }
 
@@ -1923,6 +1882,7 @@ class SoftMocksTraverser extends \PhpParser\NodeVisitorAbstract
     private $filename;
 
     private $disable_const_rewrite_level = 0;
+    private $disable_func_call_inside_encapsed_rewrite_level = 0;
 
     private $in_interface = false;
     private $in_closure_level = 0;
@@ -2353,8 +2313,130 @@ class SoftMocksTraverser extends \PhpParser\NodeVisitorAbstract
         return new \PhpParser\Node\Arg($name);
     }
 
+    public function rewriteStmt_Function(\PhpParser\Node\Stmt\Function_ $Node)
+    {
+        // if (false !== ($__softmocksvariableforcode = \Badoo\SoftMocks::isFuncMocked(__FUNCTION__))) {
+        //     $params = [/* variables with references to them */];
+        //     $mm_func_args = func_get_args();
+        //     $variadic_params_idx = '' || '<idx_of variadic_params>'
+        //     return eval($__softmocksvariableforcode);
+        // }/** @codeCoverageIgnore */
+
+        $function = new \PhpParser\Node\Expr\ConstFetch(
+            new \PhpParser\Node\Name("__FUNCTION__")
+        );
+
+        $params_arr = [];
+        $variadic_params_idx = null;
+        $last_param_idx = sizeof($Node->params) - 1;
+        if ($last_param_idx >= 0 && $Node->params[$last_param_idx]->variadic) {
+            $variadic_params_idx = $last_param_idx;
+        }
+        foreach ($Node->params as $Par) {
+            $params_arr[] = new \PhpParser\Node\Expr\ArrayItem(
+                new \PhpParser\Node\Expr\Variable($Par->name),
+                null,
+                $Par->byRef
+            );
+        }
+
+        $body_stmts = [
+            new \PhpParser\Node\Expr\Assign(
+                new \PhpParser\Node\Expr\Variable("mm_func_args"),
+                new \PhpParser\Node\Expr\FuncCall(new \PhpParser\Node\Name("func_get_args"))
+            ),
+            new \PhpParser\Node\Expr\Assign(
+                new \PhpParser\Node\Expr\Variable("params"),
+                new \PhpParser\Node\Expr\Array_($params_arr)
+            ),
+            new \PhpParser\Node\Expr\Assign(
+                new \PhpParser\Node\Expr\Variable("variadic_params_idx"),
+                new \PhpParser\Node\Scalar\String_($variadic_params_idx)
+            ),
+        ];
+
+        // generators cannot return values,
+        // we need special code handling them because yield cannot be used inside eval
+        // we get something like the following:
+        //
+        //     $mm_callback = SoftMocks::getMockForGenerator();
+        //     foreach ($mm_callback(...) as $mm_val) { yield $mm_val; }
+        //
+        // also functions with void return type declarations cannot return values
+        if ($this->has_yield) {
+            $body_stmts[] = new \PhpParser\Node\Expr\Assign(
+                new \PhpParser\Node\Expr\Variable("mm_callback"),
+                new \PhpParser\Node\Expr\StaticCall(
+                    new \PhpParser\Node\Name("\\" . SoftMocks::class),
+                    "getMockForGeneratorFunction",
+                    [$function]
+                )
+            );
+
+            $func_call_args = [];
+            foreach ($Node->params as $Par) {
+                $func_call_args[] = new \PhpParser\Node\Arg(new \PhpParser\Node\Expr\Variable($Par->name));
+            }
+
+            $val = new \PhpParser\Node\Expr\Variable("mm_val");
+
+            $body_stmts[] = new \PhpParser\Node\Stmt\Foreach_(
+                new \PhpParser\Node\Expr\FuncCall(
+                    new \PhpParser\Node\Expr\Variable("mm_callback"),
+                    $func_call_args
+                ),
+                $val,
+                [
+                    'byRef' => $Node->byRef,
+                    'stmts' => [new \PhpParser\Node\Expr\Yield_($val)],
+                ]
+            );
+
+            $body_stmts[] = new \PhpParser\Node\Stmt\Return_();
+        } else {
+            $eval = new \PhpParser\Node\Expr\Eval_(
+                new \PhpParser\Node\Expr\Variable("__softmocksvariableforcode")
+            );
+
+            if ($Node->returnType === 'void') {
+                $body_stmts[] = $eval;
+                $body_stmts[] = new \PhpParser\Node\Stmt\Return_();
+            } else {
+                $body_stmts[] = new \PhpParser\Node\Stmt\Return_($eval);
+            }
+        }
+        $body_stmts[] = new \PhpParser\Node\Name("/** @codeCoverageIgnore */");
+
+        $MockCheck = new \PhpParser\Node\Stmt\If_(
+            new \PhpParser\Node\Expr\BinaryOp\NotIdentical(
+                new \PhpParser\Node\Expr\ConstFetch(
+                    new \PhpParser\Node\Name("false")
+                ),
+                new \PhpParser\Node\Expr\Assign(
+                    new \PhpParser\Node\Expr\Variable("__softmocksvariableforcode"),
+                    new \PhpParser\Node\Expr\StaticCall(
+                        new \PhpParser\Node\Name("\\" . SoftMocks::class),
+                        $this->has_yield ? "isGeneratorMockedFunction" : "isFuncMocked",
+                        [$function]
+                    )
+                )
+            ),
+            [
+                'stmts' => $body_stmts,
+            ]
+        );
+
+        if (is_array($Node->stmts)) {
+            array_unshift($Node->stmts, $MockCheck);
+        }
+    }
+
     public function rewriteExpr_FuncCall(\PhpParser\Node\Expr\FuncCall $Node)
     {
+        if ($this->disable_func_call_inside_encapsed_rewrite_level > 0) {
+            return null;
+        }
+
         $arg_is_ref = [];
 
         if ($Node->name instanceof \PhpParser\Node\Name) {
@@ -2437,5 +2519,143 @@ class SoftMocksTraverser extends \PhpParser\NodeVisitorAbstract
 
         $NewNode->setLine($Node->getLine());
         return $NewNode;
+    }
+
+    public function beforeScalar_Encapsed()
+    {
+        $this->disable_func_call_inside_encapsed_rewrite_level++;
+    }
+
+    public function rewriteScalar_Encapsed()
+    {
+        $this->disable_func_call_inside_encapsed_rewrite_level--;
+    }
+}
+
+
+class SoftMocksStream
+{
+    public $context;
+    private $fp;
+    private $filename;
+
+    public function stream_close()
+    {
+        fclose($this->fp);
+    }
+
+    public function stream_eof()
+    {
+        return feof($this->fp);
+    }
+
+    public function stream_open($path, $mode, $options, &$opened_path)
+    {
+        $this->filename = $path;
+
+        if (mb_orig_strpos($path, "soft://") === 0) {
+            $path = mb_orig_substr($path, mb_orig_strlen("soft://"));
+        }
+
+        try {
+            $rewritten = SoftMocks::doRewrite($path, $opened_path);
+
+            if ($options & STREAM_REPORT_ERRORS == STREAM_REPORT_ERRORS) {
+                $this->fp = fopen($rewritten, $mode);
+            } else {
+                $this->fp = @fopen(SoftMocks::doRewrite($path), $mode);
+            }
+        } catch (\Exception $e) {
+            fwrite(STDERR, "Could not rewrite file $path: " . $e->getMessage() . "\n");
+            return false;
+        }
+
+        return $this->fp !== false;
+    }
+
+    public function stream_read($count)
+    {
+        return fread($this->fp, $count);
+    }
+
+    public function stream_seek($offset, $whence = SEEK_SET)
+    {
+        return fseek($this->fp, $offset, $whence);
+    }
+
+    public function stream_stat()
+    {
+        return fstat($this->fp);
+    }
+
+    public function stream_tell()
+    {
+        return ftell($this->fp);
+    }
+
+    public function url_stat($path, $flags)
+    {
+        fwrite(STDERR, $path . ' flags:' . var_export($flags, true) . (new \Exception) . "\n");
+        return stat($path);
+    }
+}
+
+class SoftMocksAccelerator
+{
+    public static function warmup($file, $max_cores)
+    {
+        $old_files = get_included_files();
+        require $file;
+        $new_files = array_diff(get_included_files(), $old_files);
+        self::warmupList($new_files, $max_cores);
+    }
+
+    public static function warmupList($new_files, $max_cores)
+    {
+        usort(
+            $new_files,
+            function($a, $b) {
+                $a_size = filesize($a);
+                $b_size = filesize($b);
+                return $b_size - $a_size;
+            }
+        );
+
+        $lists = [];
+        $sums = [];
+
+        for ($i = 0; $i < $max_cores; $i++) {
+            $lists[$i] = [];
+            $sums[$i] = 0;
+        }
+
+        foreach ($new_files as $f) {
+            asort($sums, SORT_NUMERIC);
+            $size = filesize($f);
+            $cur_shard = key($sums);
+            $lists[$cur_shard][] = $f;
+            $sums[$cur_shard] += $size;
+        }
+
+        for ($i = 0; $i < $max_cores; $i++) {
+            $pid = pcntl_fork();
+            if ($pid < 0) {
+                die("Could not fork");
+            } else if ($pid == 0) {
+                foreach ($lists[$i] as $f) {
+                    fwrite(STDOUT, "\033[2KRewriting $f (" . round(filesize($f) / 1024, 1) . " KiB)\r");
+                    try {
+                        SoftMocks::doRewrite($f);
+                    } catch (\Exception $e) {
+                        fwrite(STDERR, "\nCould not rewrite file $f: " . $e->getMessage() . "\n");
+                    }
+                }
+                exit(0);
+            }
+        }
+
+        for ($i = 0; $i < $max_cores; $i++) {
+            pcntl_wait($status);
+        }
     }
 }
